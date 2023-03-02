@@ -2,12 +2,13 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Rendering.PostProcessing;
+//using UnityEngine.Rendering.PostProcessing;
 
 namespace NWH.Common.PostProcessing
 {
     public class PostProcessingController : MonoBehaviour
     {
+        /*
         public string postProcessingLayer = "PostProcessing";
         public PostProcessResources resources;
         
@@ -33,6 +34,7 @@ namespace NWH.Common.PostProcessing
                 ppl.Init(resources);
             }
         }
+        */
     }
 }
 
