@@ -10,10 +10,11 @@ using float3 = Unity.Mathematics.float3;
 
 namespace DeformEditor
 {
-    [CustomEditor(typeof(LatticeDeformer))]
-    public class LatticeDeformerEditor : DeformerEditor
+    [CustomEditor(typeof(SurfaceDeformer))]
+    public class SurfaceDeformerEditor : DeformerEditor
     {
-        private Vector3Int newResolution;
+        private MeshFilter newMesh;
+        private float newDistanceMin;
 
         private float3 handleScale = Vector3.one;
         private Tool activeTool = Tool.None;
@@ -34,23 +35,28 @@ namespace DeformEditor
         
         // Positions and resolution before a resize
         private float3[] cachedResizePositions = new float3[0];
-        private Vector3Int cachedResizeResolution;
         
         [SerializeField] private List<int> selectedIndices = new List<int>();
 
         private static class Content
         {
-            public static readonly GUIContent Resolution = new GUIContent(text: "Resolution", tooltip: "Per axis control point counts, the higher the resolution the more splits");
+            public static readonly GUIContent Resolution  = new GUIContent(text: "Resolution", tooltip: "Per axis control point counts, the higher the resolution the more splits");
+            public static readonly GUIContent Mesh        = new GUIContent(text: "Mesh", tooltip: "Reference Mesh");
+            public static readonly GUIContent DistanceMin = new GUIContent(text: "Distance Min", tooltip: "Minimum distance between mesh points");
             public static readonly GUIContent StopEditing = new GUIContent(text: "Stop Editing Control Points", tooltip: "Restore normal transform tools\n\nShortcut: Escape");
         }
 
         private class Properties
         {
             public SerializedProperty Resolution;
+            public SerializedProperty Mesh;
+            public SerializedProperty DistanceMin;
 
             public Properties(SerializedObject obj)
             {
                 Resolution = obj.FindProperty("resolution");
+                Mesh = obj.FindProperty("meshFilter");
+                DistanceMin = obj.FindProperty("distanceMin");
             }
         }
 
@@ -62,8 +68,9 @@ namespace DeformEditor
 
             properties = new Properties(serializedObject);
             
-            LatticeDeformer latticeDeformer = ((LatticeDeformer) target);
-            newResolution = latticeDeformer.Resolution;
+            SurfaceDeformer surfaceDeformer = ((SurfaceDeformer) target);
+            newMesh = surfaceDeformer.Mesh;
+            newDistanceMin = surfaceDeformer.DistanceMin;
             CacheResizePositionsFromChange();
             
             Undo.undoRedoPerformed += UndoRedoPerformed;
@@ -71,8 +78,9 @@ namespace DeformEditor
 
         private void UndoRedoPerformed()
         {
-            LatticeDeformer latticeDeformer = ((LatticeDeformer) target);
-            newResolution = latticeDeformer.Resolution;
+            SurfaceDeformer surfaceDeformer = ((SurfaceDeformer) target);
+            newMesh = surfaceDeformer.Mesh;
+            newDistanceMin = surfaceDeformer.DistanceMin;
             CacheResizePositionsFromChange();
         }
 
@@ -80,43 +88,34 @@ namespace DeformEditor
         {
             base.OnInspectorGUI();
 
-            LatticeDeformer latticeDeformer = ((LatticeDeformer) target);
+            SurfaceDeformer surfaceDeformer = ((SurfaceDeformer) target);
 
             serializedObject.UpdateIfRequiredOrScript();
 
             EditorGUI.BeginChangeCheck();
-            
-            newResolution = EditorGUILayout.Vector3IntField(Content.Resolution, newResolution);
-            // Make sure we have at least two control points per axis
-            newResolution = Vector3Int.Max(newResolution, new Vector3Int(2, 2, 2));
-            // Don't let the lattice resolution get ridiculously high
-            newResolution = Vector3Int.Min(newResolution, new Vector3Int(32, 32, 32));
-            
-            EditorGUILayout.LabelField(string.Format("Control Points: {0}", latticeDeformer.ControlPoints.Length));
+
+            newMesh = (MeshFilter) EditorGUILayout.ObjectField("Mesh", newMesh, typeof(MeshFilter), true);
+            surfaceDeformer.SetMeshFilter(newMesh);
+
+            newDistanceMin = Mathf.Max(EditorGUILayout.FloatField(Content.DistanceMin, newDistanceMin), 0);
+            surfaceDeformer.SetDistanceMin(newDistanceMin);
+
+            EditorGUILayout.LabelField(string.Format("Control Points: {0}", surfaceDeformer.ControlPoints.Length));
 
             if (EditorGUI.EndChangeCheck())
             {
-                Undo.RecordObject(target, "Update Lattice");
-                latticeDeformer.GenerateControlPoints(newResolution, cachedResizePositions, cachedResizeResolution);
+                Undo.RecordObject(target, "Update Surface");
+                surfaceDeformer.GenerateControlPoints();
                 selectedIndices.Clear();
             }
 
-            if (GUILayout.Button("Reset Lattice Points"))
+            if (GUILayout.Button("Reset Surface Points"))
             {
-                Undo.RecordObject(target, "Reset Lattice Points");
-                latticeDeformer.GenerateControlPoints(newResolution);
+                Undo.RecordObject(target, "Reset Surface Points");
+                surfaceDeformer.GenerateControlPoints();
                 selectedIndices.Clear();
                 
                 CacheResizePositionsFromChange();
-            }
-
-            if (latticeDeformer.CanAutoFitBounds)
-            {
-                if (GUILayout.Button("Auto-Fit Bounds"))
-                {
-                    Undo.RecordObject(latticeDeformer.transform, "Auto-Fit Bounds");
-                    latticeDeformer.FitBoundsToParentDeformable();
-                }
             }
 
             serializedObject.ApplyModifiedProperties();
@@ -128,96 +127,76 @@ namespace DeformEditor
         {
             base.OnSceneGUI();
 
-            LatticeDeformer lattice = target as LatticeDeformer;
-            Transform transform = lattice.transform;
-            float3[] controlPoints = lattice.ControlPoints;
+            SurfaceDeformer surface = target as SurfaceDeformer;
+            Transform transform = surface.transform;
+            float3[] controlPoints = surface.ControlPoints;
             Event e = Event.current;
 
             using (new Handles.DrawingScope(transform.localToWorldMatrix))
             {
                 var cachedZTest = Handles.zTest;
 
-                // Change the depth testing to only show handles in front of solid objects (i.e. typical depth testing) 
-                Handles.zTest = CompareFunction.LessEqual;
-                DrawLattice(lattice, DeformHandles.LineMode.Solid);
-                // Change the depth testing to only show handles *behind* solid objects 
-                Handles.zTest = CompareFunction.Greater;
-                DrawLattice(lattice, DeformHandles.LineMode.Light);
-
                 // Restore the original z test value now we're done with our drawing
                 Handles.zTest = cachedZTest;
 
-                var resolution = lattice.Resolution;
-                for (int z = 0; z < resolution.z; z++)
+                for (int i = 0; i < surface.ControlPoints.Length; i++)
                 {
-                    for (int y = 0; y < resolution.y; y++)
+                    var controlPointHandleID = GUIUtility.GetControlID("SurfaceDeformerControlPoint".GetHashCode(), FocusType.Passive);
+                    var activeColor = DeformEditorSettings.SolidHandleColor;
+                    var controlPointIndex = i;
+
+                    if (GUIUtility.hotControl == controlPointHandleID || selectedIndices.Contains(controlPointIndex))
                     {
-                        for (int x = 0; x < resolution.x; x++)
+                        activeColor = Handles.selectedColor;
+                    }
+                    else if (HandleUtility.nearestControl == controlPointHandleID)
+                    {
+                        activeColor = Handles.preselectionColor;
+                    }
+
+                    if (e.type == EventType.MouseDown && HandleUtility.nearestControl == controlPointHandleID && e.button == 0 && MouseActionAllowed)
+                    {
+                        BeginSelectionChangeRegion();
+                        GUIUtility.hotControl = controlPointHandleID;
+                        GUIUtility.keyboardControl = controlPointHandleID;
+                        e.Use();
+
+                        bool modifierKeyPressed = e.control || e.shift || e.command;
+
+                        if (modifierKeyPressed && selectedIndices.Contains(controlPointIndex))
                         {
-                            var controlPointHandleID = GUIUtility.GetControlID("LatticeDeformerControlPoint".GetHashCode(), FocusType.Passive);
-                            var activeColor = DeformEditorSettings.SolidHandleColor;
-                            var controlPointIndex = lattice.GetIndex(x, y, z);
-
-                            if (GUIUtility.hotControl == controlPointHandleID || selectedIndices.Contains(controlPointIndex))
+                            // Pressed a modifier key so toggle the selection
+                            selectedIndices.Remove(controlPointIndex);
+                        }
+                        else
+                        {
+                            if (!modifierKeyPressed)
                             {
-                                activeColor = Handles.selectedColor;
-                            }
-                            else if (HandleUtility.nearestControl == controlPointHandleID)
-                            {
-                                activeColor = Handles.preselectionColor;
+                                selectedIndices.Clear();
                             }
 
-                            if (e.type == EventType.MouseDown && HandleUtility.nearestControl == controlPointHandleID && e.button == 0 && MouseActionAllowed)
+                            if (!selectedIndices.Contains(controlPointIndex))
                             {
-                                BeginSelectionChangeRegion();
-                                GUIUtility.hotControl = controlPointHandleID;
-                                GUIUtility.keyboardControl = controlPointHandleID;
-                                e.Use();
-
-                                bool modifierKeyPressed = e.control || e.shift || e.command;
-
-                                if (modifierKeyPressed && selectedIndices.Contains(controlPointIndex))
-                                {
-                                    // Pressed a modifier key so toggle the selection
-                                    selectedIndices.Remove(controlPointIndex);
-                                }
-                                else
-                                {
-                                    if (!modifierKeyPressed)
-                                    {
-                                        selectedIndices.Clear();
-                                    }
-
-                                    if (!selectedIndices.Contains(controlPointIndex))
-                                    {
-                                        selectedIndices.Add(controlPointIndex);
-                                    }
-                                }
-
-                                EndSelectionChangeRegion();
-                            }
-
-                            if (Tools.current != Tool.None && selectedIndices.Count != 0)
-                            {
-                                // If the user changes tool, change our internal mode to match but disable the corresponding Unity tool
-                                // (e.g. they hit W key or press on the Rotate Tool button on the top left toolbar) 
-                                activeTool = Tools.current;
-                                Tools.current = Tool.None;
-                            }
-
-                            using (new Handles.DrawingScope(activeColor))
-                            {
-                                var position = controlPoints[controlPointIndex];
-                                var size = HandleUtility.GetHandleSize(position) * DeformEditorSettings.ScreenspaceLatticeHandleCapSize;
-
-                                Handles.DotHandleCap(
-                                    controlPointHandleID,
-                                    position,
-                                    Quaternion.identity,
-                                    size,
-                                    e.type);
+                                selectedIndices.Add(controlPointIndex);
                             }
                         }
+
+                        EndSelectionChangeRegion();
+                    }
+
+                    if (Tools.current != Tool.None && selectedIndices.Count != 0)
+                    {
+                        // If the user changes tool, change our internal mode to match but disable the corresponding Unity tool
+                        // (e.g. they hit W key or press on the Rotate Tool button on the top left toolbar) 
+                        activeTool = Tools.current;
+                        Tools.current = Tool.None;
+                    }
+
+                    using (new Handles.DrawingScope(activeColor))
+                    {
+                        var position = controlPoints[controlPointIndex];
+                        var size = HandleUtility.GetHandleSize(position) * DeformEditorSettings.ScreenspaceLatticeHandleCapSize;
+                        Handles.DotHandleCap(controlPointHandleID, position, Quaternion.identity, size, e.type);                                
                     }
                 }
             }
@@ -284,7 +263,7 @@ namespace DeformEditor
                     float3 newPosition = Handles.PositionHandle(handlePosition, handleRotation);
                     if (EditorGUI.EndChangeCheck())
                     {
-                        Undo.RecordObject(target, "Update Lattice");
+                        Undo.RecordObject(target, "Update Surface");
 
                         var delta = newPosition - handlePosition;
                         delta = transform.InverseTransformVector(delta);
@@ -302,7 +281,7 @@ namespace DeformEditor
                     quaternion newRotation = Handles.RotationHandle(handleRotation, handlePosition);
                     if (EditorGUI.EndChangeCheck())
                     {
-                        Undo.RecordObject(target, "Update Lattice");
+                        Undo.RecordObject(target, "Update Surface");
 
                         for (var index = 0; index < selectedIndices.Count; index++)
                         {
@@ -326,7 +305,7 @@ namespace DeformEditor
                     handleScale = Handles.ScaleHandle(handleScale, handlePosition, handleRotation, size);
                     if (EditorGUI.EndChangeCheck())
                     {
-                        Undo.RecordObject(target, "Update Lattice");
+                        Undo.RecordObject(target, "Update Surface");
 
                         for (var index = 0; index < selectedIndices.Count; index++)
                         {
@@ -439,22 +418,14 @@ namespace DeformEditor
                 SceneView.RepaintAll();
             }
 
-            // If the lattice is visible, override Unity's built-in Select All so that it selects all control points 
+            // If the surface is visible, override Unity's built-in Select All so that it selects all control points 
             if (DeformUnityObjectSelection.SelectAllPressed)
             {
                 BeginSelectionChangeRegion();
                 selectedIndices.Clear();
-                var resolution = lattice.Resolution;
-                for (int z = 0; z < resolution.z; z++)
+                for (int i = 0; i < surface.ControlPoints.Length; i++)
                 {
-                    for (int y = 0; y < resolution.y; y++)
-                    {
-                        for (int x = 0; x < resolution.x; x++)
-                        {
-                            var controlPointIndex = lattice.GetIndex(x, y, z);
-                            selectedIndices.Add(controlPointIndex);
-                        }
-                    }
+                    selectedIndices.Add(i);
                 }
 
                 EndSelectionChangeRegion();
@@ -510,8 +481,8 @@ namespace DeformEditor
         {
             // Cache the selected control point positions before the interaction, so that all handle
             // transformations are done using the original values rather than compounding error each frame
-            var latticeDeformer = (target as LatticeDeformer);
-            float3[] controlPoints = latticeDeformer.ControlPoints;
+            var surfaceDeformer = (target as SurfaceDeformer);
+            float3[] controlPoints = surfaceDeformer.ControlPoints;
             selectedOriginalPositions.Clear();
             foreach (int selectedIndex in selectedIndices)
             {
@@ -521,12 +492,10 @@ namespace DeformEditor
 
         private void CacheResizePositionsFromChange()
         {
-            var latticeDeformer = (target as LatticeDeformer);
-            float3[] controlPoints = latticeDeformer.ControlPoints;
+            var surfaceDeformer = (target as SurfaceDeformer);
+            float3[] controlPoints = surfaceDeformer.ControlPoints;
             cachedResizePositions = new float3[controlPoints.Length];
             controlPoints.CopyTo(cachedResizePositions, 0);
-
-            cachedResizeResolution = latticeDeformer.Resolution;
         }
 
         private static bool MouseActionAllowed
@@ -536,44 +505,6 @@ namespace DeformEditor
                 if (Event.current.alt) return false;
 
                 return true;
-            }
-        }
-
-        private void DrawLattice(LatticeDeformer lattice, DeformHandles.LineMode lineMode)
-        {
-            var resolution = lattice.Resolution;
-            var controlPoints = lattice.ControlPoints;
-            for (int z = 0; z < resolution.z - 1; z++)
-            {
-                for (int y = 0; y < resolution.y - 1; y++)
-                {
-                    for (int x = 0; x < resolution.x - 1; x++)
-                    {
-                        int index000 = lattice.GetIndex(x, y, z);
-                        int index100 = lattice.GetIndex(x + 1, y, z);
-                        int index010 = lattice.GetIndex(x, y + 1, z);
-                        int index110 = lattice.GetIndex(x + 1, y + 1, z);
-                        int index001 = lattice.GetIndex(x, y, z + 1);
-                        int index101 = lattice.GetIndex(x + 1, y, z + 1);
-                        int index011 = lattice.GetIndex(x, y + 1, z + 1);
-                        int index111 = lattice.GetIndex(x + 1, y + 1, z + 1);
-
-                        DeformHandles.Line(controlPoints[index000], controlPoints[index100], lineMode);
-                        DeformHandles.Line(controlPoints[index010], controlPoints[index110], lineMode);
-                        DeformHandles.Line(controlPoints[index001], controlPoints[index101], lineMode);
-                        DeformHandles.Line(controlPoints[index011], controlPoints[index111], lineMode);
-
-                        DeformHandles.Line(controlPoints[index000], controlPoints[index010], lineMode);
-                        DeformHandles.Line(controlPoints[index100], controlPoints[index110], lineMode);
-                        DeformHandles.Line(controlPoints[index001], controlPoints[index011], lineMode);
-                        DeformHandles.Line(controlPoints[index101], controlPoints[index111], lineMode);
-
-                        DeformHandles.Line(controlPoints[index000], controlPoints[index001], lineMode);
-                        DeformHandles.Line(controlPoints[index100], controlPoints[index101], lineMode);
-                        DeformHandles.Line(controlPoints[index010], controlPoints[index011], lineMode);
-                        DeformHandles.Line(controlPoints[index110], controlPoints[index111], lineMode);
-                    }
-                }
             }
         }
     }
