@@ -127,7 +127,13 @@ namespace DeformEditor
         {
             base.OnSceneGUI();
 
+
             SurfaceDeformer surface = target as SurfaceDeformer;
+            
+            if(surface.ControlPointsBase == null || surface.ControlPoints == null){ 
+                return;
+            }
+
             Transform transform = surface.transform;
             float3[] controlPoints = surface.ControlPoints;
             Event e = Event.current;

@@ -2,26 +2,22 @@ using System.Collections.Generic;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
-using Unity.Mathematics;
 using UnityEngine;
 using static Unity.Mathematics.math;
 using float3 = Unity.Mathematics.float3;
-using float4x4 = Unity.Mathematics.float4x4;
 
 namespace Deform
 {
     [Deformer(Name = "Surface", Description = "Free-form deform a mesh using surface control points", Type = typeof(SurfaceDeformer))]
     [HelpURL("https://github.com/keenanwoodall/Deform/wiki/SurfaceDeformer")]
-    public class SurfaceDeformer : Deformer
+    public class SurfaceDeformer : AControlPointDeformer
     {
         public float3[] ControlPointsBase => controlPointsBase;
-        public float3[] ControlPoints => controlPoints;
         public MeshFilter Mesh => meshFilter;
         public float DistanceMin => distanceMin;
 
         [SerializeField, HideInInspector] private Transform target;
         [SerializeField] private float3[] controlPointsBase;
-        [SerializeField] private float3[] controlPoints;
         [SerializeField] private MeshFilter meshFilter = null;
         [SerializeField] private float distanceMin = 0.1f;
 
@@ -131,6 +127,8 @@ namespace Deform
 
         void OnDrawGizmosSelected()
         {
+            if(controlPointsBase == null || controlPointsBase == null){ return; }
+
             Gizmos.color = Color.red;
             Gizmos.matrix = transform.localToWorldMatrix;
             for(int i = 0; i < controlPointsBase.Length; i++){

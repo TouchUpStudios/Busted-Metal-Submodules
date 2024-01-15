@@ -11,7 +11,7 @@ namespace Deform
 {
     [Deformer(Name = "Lattice", Description = "Free-form deform a mesh using lattice control points", Type = typeof(LatticeDeformer))]
     [HelpURL("https://github.com/keenanwoodall/Deform/wiki/LatticeDeformer")]
-    public class LatticeDeformer : Deformer
+    public class LatticeDeformer : AControlPointDeformer
     {
         public bool CanAutoFitBounds
         {
@@ -30,12 +30,9 @@ namespace Deform
             }
         }
 
-        public float3[] ControlPoints => controlPoints;
-
         public Vector3Int Resolution => resolution;
 
         [SerializeField, HideInInspector] private Transform target;
-        [SerializeField] private float3[] controlPoints;
         [SerializeField] private Vector3Int resolution = new Vector3Int(2, 2, 2);
 
         protected virtual void Reset()
